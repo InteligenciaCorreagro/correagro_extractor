@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    branches: [production]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set version
+        id: set_version
+        shell: pwsh
+        run: |
+          $v = "production-${{ github.run_number }}"
+          Set-Content -Path "core/version.py" -Value "__version__ = `"$v`"" -Encoding utf8
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$v"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build (portable)
+        run: |
+          python -m PyInstaller --noconsole --clean --noconfirm --name correagro_extractor --add-data=assets:assets run.py
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          ISCC installers\inno\correagro_extractor.iss
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          if (Test-Path "dist/Correagro-Extractor-Portable.zip") { Remove-Item "dist/Correagro-Extractor-Portable.zip" -Force }
+          Compress-Archive -Path "dist/correagro_extractor/*" -DestinationPath "dist/Correagro-Extractor-Portable.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.set_version.outputs.tag }}
+          name: ${{ steps.set_version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/installer/Correagro-Extractor-Setup.exe
+            dist/Correagro-Extractor-Portable.zip
