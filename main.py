@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QCheckBox, QLineEdit, QSizePolicy, QSpacerItem,
     QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView,
     QMessageBox, QToolButton, QAbstractItemView, QGridLayout,
-    QGraphicsDropShadowEffect,
+    QGraphicsDropShadowEffect, QTextBrowser,
 )
 from PySide6.QtCore import (
     Qt, QThread, Signal, QObject, QPropertyAnimation,
@@ -490,6 +490,7 @@ class Sidebar(QWidget):
             ("📄", "OP Vigentes"),
             ("📊", "Físicos Compras"),
             ("💼", "Cartera"),
+            ("📘", "Instructivo"),
             ("⚙️",  "Generar PDFs"),
         ]
         for i, (ico, lbl) in enumerate(items):
@@ -516,8 +517,11 @@ class Sidebar(QWidget):
         self._on_click(idx)
 
     def enable_pages(self, enabled: bool):
-        for b in self.btns[1:]:
-            b.setEnabled(enabled)
+        for i, b in enumerate(self.btns[1:], start=1):
+            if i == 4:
+                b.setEnabled(True)
+            else:
+                b.setEnabled(enabled)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -729,6 +733,63 @@ class PageClientTable(QWidget):
 
     def get_selected_nits(self) -> list[str]:
         return self.table.get_selected_nits()
+
+
+class PageInstructivo(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(32, 32, 32, 32)
+        lay.setSpacing(14)
+
+        lay.addWidget(SectionTitle("📘  Instructivo"))
+        lay.addWidget(SubLabel("Guía rápida para cargar archivos y generar PDFs."))
+        lay.addWidget(Divider())
+
+        card = Card()
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(16, 14, 16, 14)
+        card_lay.setSpacing(10)
+
+        txt = QTextBrowser()
+        txt.setOpenExternalLinks(True)
+        txt.setStyleSheet(f"""
+            QTextBrowser {{
+                background: transparent;
+                border: none;
+                color: {TEXT_MAIN};
+                font-size: 13px;
+                line-height: 1.4;
+            }}
+            a {{ color: {ACCENT}; }}
+        """)
+        txt.setHtml("""
+        <h2 style="margin:0 0 8px 0;">Flujo recomendado</h2>
+        <ol style="margin-top:0;">
+          <li><b>Cargar archivos</b>: entra a <b>Cargar archivo</b> y selecciona EXTRACTOS y/o CARTERA.</li>
+          <li><b>Seleccionar clientes</b>: abre la pestaña correspondiente (OP Vigentes, Físicos Compras o Cartera) y marca los NITs.</li>
+          <li><b>Generar PDFs</b>: elige la carpeta de salida y presiona <b>Generar PDFs</b>.</li>
+        </ol>
+        <h2 style="margin:16px 0 8px 0;">Qué genera cada pestaña</h2>
+        <ul style="margin-top:0;">
+          <li><b>OP Vigentes</b>: un PDF por NIT con saldos y movimientos.</li>
+          <li><b>Físicos Compras</b>: un PDF por NIT con el extracto de físicos.</li>
+          <li><b>Cartera</b>: un PDF por NIT con el estado de cuenta (archivo de cartera).</li>
+        </ul>
+        <h2 style="margin:16px 0 8px 0;">Carpetas de salida</h2>
+        <ul style="margin-top:0;">
+          <li>Se crean subcarpetas por tipo: <b>OP_VIGENTES</b>, <b>EXTRACTOS</b> y <b>CARTERA</b>.</li>
+          <li>El nombre del archivo incluye el NIT para fácil búsqueda.</li>
+        </ul>
+        <h2 style="margin:16px 0 8px 0;">Actualizaciones</h2>
+        <ul style="margin-top:0;">
+          <li>La app consulta actualizaciones <b>solo en builds de production</b>.</li>
+          <li>Si hay una versión nueva, ofrece descargar e instalar desde GitHub Releases.</li>
+        </ul>
+        """)
+
+        card_lay.addWidget(txt)
+        lay.addWidget(card, 1)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1002,9 +1063,10 @@ class MainWindow(QMainWindow):
             "💼",
             ["NIT", "Razón Social", "Registros", "Total"],
         )
+        self.page_help = PageInstructivo()
         self.page_gen = PageGenerate(self)
 
-        for p in [self.page_load, self.page_op, self.page_fc, self.page_cartera, self.page_gen]:
+        for p in [self.page_load, self.page_op, self.page_fc, self.page_cartera, self.page_help, self.page_gen]:
             self.stack.addWidget(p)
 
         # Connect generate page summary updates
@@ -1066,7 +1128,7 @@ class MainWindow(QMainWindow):
 
     def _switch_page(self, idx):
         self.stack.setCurrentIndex(idx)
-        if idx == 4:
+        if idx == 5:
             n_op = len(self.page_op.get_selected_nits()) if self.informe else 0
             n_fc = len(self.page_fc.get_selected_nits()) if self.informe else 0
             n_ca = len(self.page_cartera.get_selected_nits()) if self.cartera else 0
@@ -1105,7 +1167,8 @@ class MainWindow(QMainWindow):
             self.sidebar.btns[1].setEnabled(bool(self.informe))
             self.sidebar.btns[2].setEnabled(bool(self.informe))
             self.sidebar.btns[3].setEnabled(bool(self.cartera))
-            self.sidebar.btns[4].setEnabled(bool(self.informe or self.cartera))
+            self.sidebar.btns[4].setEnabled(True)
+            self.sidebar.btns[5].setEnabled(bool(self.informe or self.cartera))
         except Exception as e:
             import traceback
             QMessageBox.critical(self, "Error al cargar",
