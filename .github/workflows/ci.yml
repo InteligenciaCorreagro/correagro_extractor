@@ -23,10 +23,9 @@ jobs:
           python -m compileall core generators main.py run.py
       - name: Build (portable)
         run: |
-          python -m PyInstaller --noconsole --clean --noconfirm --name correagro_extractor --add-data=assets:assets run.py
+          python -m PyInstaller --noconsole --clean --noconfirm --name correagro_extractor --add-data "assets;assets" --add-data "update_repo.txt;." run.py
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: correagro_extractor-portable
           path: dist/correagro_extractor
-
