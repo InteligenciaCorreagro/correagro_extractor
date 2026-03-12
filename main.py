@@ -1016,6 +1016,8 @@ class MainWindow(QMainWindow):
         pass
 
     def _check_updates(self):
+        if not str(APP_VERSION).startswith("production-"):
+            return
         try:
             from core.updater import UpdateWorker
         except Exception:
