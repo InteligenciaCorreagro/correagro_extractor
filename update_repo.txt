@@ -1,2 +1,2 @@
-CORREAGRO-SAS/correagro_extractor
+InteligenciaCorreagro/correagro_extractor
 

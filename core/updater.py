@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import QObject, Signal
 
 
-DEFAULT_REPO = "CORREAGRO-SAS/correagro_extractor"
+DEFAULT_REPO = "InteligenciaCorreagro/correagro_extractor"
 DEFAULT_ASSET_NAME = "Correagro-Extractor-Setup.exe"
 
 

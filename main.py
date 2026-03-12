@@ -49,6 +49,23 @@ QWidget {{
     color: {TEXT_MAIN};
     font-family: 'Segoe UI', 'Arial', sans-serif;
 }}
+QMessageBox, QDialog {{
+    background: {CARD_BG};
+    color: {TEXT_MAIN};
+}}
+QMessageBox QLabel, QDialog QLabel {{
+    color: {TEXT_MAIN};
+}}
+QMessageBox QPushButton {{
+    background: {ACCENT2};
+    color: {TEXT_MAIN};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 6px 12px;
+}}
+QMessageBox QPushButton:hover {{
+    background: {ACCENT};
+}}
 QScrollBar:vertical {{
     background: {CARD_BG};
     width: 8px;
