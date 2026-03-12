@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import tempfile
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
@@ -58,9 +59,18 @@ def _http_json(url: str) -> dict:
             "Accept": "application/vnd.github+json",
         },
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        data = resp.read().decode("utf-8", errors="replace")
-    return json.loads(data)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read().decode("utf-8", errors="replace")
+        return json.loads(data)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise RuntimeError("Repo privado o release inexistente (HTTP 404).") from e
+        if e.code == 403:
+            raise RuntimeError("Acceso denegado o rate-limit de GitHub (HTTP 403).") from e
+        raise RuntimeError(f"Error HTTP al consultar GitHub (HTTP {e.code}).") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError("No hay conexión o GitHub está bloqueado.") from e
 
 
 def get_latest_release(repo: str, preferred_asset_name: str = DEFAULT_ASSET_NAME) -> ReleaseInfo | None:
@@ -134,4 +144,3 @@ class UpdateWorker(QObject):
             self.finished.emit(rel, None)
         except Exception as e:
             self.finished.emit(None, str(e))
-

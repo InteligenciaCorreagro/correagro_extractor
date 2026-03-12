@@ -736,8 +736,9 @@ class PageClientTable(QWidget):
 
 
 class PageInstructivo(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, app_ref, parent=None):
         super().__init__(parent)
+        self.app_ref = app_ref
         lay = QVBoxLayout(self)
         lay.setContentsMargins(32, 32, 32, 32)
         lay.setSpacing(14)
@@ -745,6 +746,17 @@ class PageInstructivo(QWidget):
         lay.addWidget(SectionTitle("📘  Instructivo"))
         lay.addWidget(SubLabel("Guía rápida para cargar archivos y generar PDFs."))
         lay.addWidget(Divider())
+
+        top_actions = QHBoxLayout()
+        self.lbl_version = QLabel(f"Versión instalada: {APP_VERSION}")
+        self.lbl_version.setStyleSheet(f"color: {TEXT_SUB}; font-size: 12px;")
+        self.btn_check_updates = QPushButton("🔄  Buscar actualizaciones")
+        self.btn_check_updates.setStyleSheet(BTN_SMALL)
+        self.btn_check_updates.clicked.connect(self.app_ref.check_updates_manual)
+        top_actions.addWidget(self.lbl_version)
+        top_actions.addStretch()
+        top_actions.addWidget(self.btn_check_updates)
+        lay.addLayout(top_actions)
 
         card = Card()
         card_lay = QVBoxLayout(card)
@@ -1063,7 +1075,7 @@ class MainWindow(QMainWindow):
             "💼",
             ["NIT", "Razón Social", "Registros", "Total"],
         )
-        self.page_help = PageInstructivo()
+        self.page_help = PageInstructivo(self)
         self.page_gen = PageGenerate(self)
 
         for p in [self.page_load, self.page_op, self.page_fc, self.page_cartera, self.page_help, self.page_gen]:
@@ -1077,14 +1089,26 @@ class MainWindow(QMainWindow):
         # Actualizar resumen al cambiar a página de generar
         pass
 
-    def _check_updates(self):
+    def check_updates_manual(self):
+        self._check_updates(interactive=True)
+
+    def _check_updates(self, interactive: bool = False):
+        self._update_interactive = bool(interactive)
         if not str(APP_VERSION).startswith("production-"):
+            if self._update_interactive:
+                QMessageBox.information(
+                    self,
+                    "Actualizaciones",
+                    "Esta instalación no es de production, por eso no se actualiza automáticamente.\n\n"
+                    "Instala la versión publicada desde la rama production (GitHub Releases).",
+                )
             return
         try:
-            from core.updater import UpdateWorker
+            from core.updater import UpdateWorker, get_update_repo
         except Exception:
             return
 
+        self._update_repo = get_update_repo()
         self._upd_thread = QThread()
         self._upd_worker = UpdateWorker(APP_VERSION)
         self._upd_worker.moveToThread(self._upd_thread)
@@ -1096,7 +1120,28 @@ class MainWindow(QMainWindow):
         self._upd_thread.start()
 
     def _on_update_checked(self, release, error):
-        if error or release is None:
+        if error:
+            if getattr(self, "_update_interactive", False):
+                repo = getattr(self, "_update_repo", "")
+                QMessageBox.warning(
+                    self,
+                    "No se pudo buscar actualización",
+                    f"{error}\n\nRepo: {repo}\n\n"
+                    "Causas comunes:\n"
+                    "- El repositorio es privado.\n"
+                    "- No hay internet o el firewall bloquea GitHub.\n"
+                    "- No existe un Release marcado como Latest.",
+                )
+            return
+
+        if release is None:
+            if getattr(self, "_update_interactive", False):
+                repo = getattr(self, "_update_repo", "")
+                QMessageBox.information(
+                    self,
+                    "Actualizaciones",
+                    f"No hay actualizaciones disponibles.\n\nVersión actual: {APP_VERSION}\nRepo: {repo}",
+                )
             return
         try:
             from core.updater import DEFAULT_ASSET_NAME, download_file, run_installer
