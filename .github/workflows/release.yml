@@ -32,7 +32,7 @@ jobs:
 
       - name: Build (portable)
         run: |
-          python -m PyInstaller --noconsole --clean --noconfirm --name correagro_extractor --add-data "assets;assets" --add-data "update_repo.txt;." run.py
+          python -m PyInstaller --noconsole --clean --noconfirm --name correagro_extractor --add-data=assets:assets --add-data=update_repo.txt:. run.py
 
       - name: Install Inno Setup
         shell: pwsh
