@@ -28,6 +28,16 @@ def _norm_nit(val) -> str:
     return "".join(ch for ch in s if ch.isdigit())
 
 
+def _is_valid_nit(nit: str) -> bool:
+    """
+    Filtra falsos NIT provenientes de celdas vacías/formulas:
+    - vacío
+    - solo ceros (ej. "0", "00", "000000")
+    """
+    n = _norm_nit(nit)
+    return bool(n) and any(ch != "0" for ch in n)
+
+
 def _fmt_date(val) -> str:
     if val is None:
         return ""
@@ -73,7 +83,7 @@ def _load_nit_map(wb) -> Tuple[Dict[str, str], Dict[str, dict]]:
         nit  = row[0]
         name = row[1]
         nit_str = _norm_nit(nit)
-        if not (nit_str and name):
+        if not (_is_valid_nit(nit_str) and name):
             continue
         name_key = str(name).strip().upper()
         nit_by_name[name_key] = nit_str
@@ -103,13 +113,12 @@ def _nit_to_name(nit_str: str, nit_by_name: Dict[str, str]) -> str:
 
 # ──────────────────────────────────────────────────────────────
 # OP VIGENTES
-# Fuente de verdad: todos los clientes del BD.
-# Los que el pivot omitió (saldo=0) se incluyen con tabla vacía.
+# Fuente de verdad: solo clientes presentes en la hoja OP VIGENTES.
+# No se incluyen clientes "extra" desde BD cuando no existen en el pivot.
 # ──────────────────────────────────────────────────────────────
 def _parse_op_vigentes(
     wb,
     nit_by_name: Dict[str, str],
-    saldos_by_nit: Dict[str, dict],
 ) -> Tuple[datetime, datetime, List[ClienteOpVigente]]:
     ws = wb[SHEET_OP_VIGENTES]
 
@@ -130,7 +139,7 @@ def _parse_op_vigentes(
             val_b = str(row[1]).strip() if row[1] else ""
             if val_b == "Cliente":
                 possible_nit = _norm_nit(row[2])
-                if possible_nit:
+                if _is_valid_nit(possible_nit):
                     filter_nit = possible_nit
 
         # Buscamos fila de encabezados
@@ -193,15 +202,6 @@ def _parse_op_vigentes(
             fecha_vencimiento = _fmt_date(fecha_venc),
             saldo_final       = _safe_float(saldo),
         ))
-
-    # Paso 2: agregar clientes del BD que el pivot omitió (saldo=0)
-    if not filter_nit:
-        for nit_str in saldos_by_nit:
-            if nit_str not in clientes_dict:
-                clientes_dict[nit_str] = ClienteOpVigente(
-                    nit=nit_str,
-                    razon_social=_nit_to_name(nit_str, nit_by_name),
-                )
 
     return desde, hasta, sorted(clientes_dict.values(), key=lambda c: c.razon_social)
 
@@ -403,7 +403,7 @@ def _parse_fisicos_compras(
 def parse_informe(excel_path: str) -> InformeData:
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     nit_by_name, saldos_by_nit = _load_nit_map(wb)
-    desde, hasta, clientes_op = _parse_op_vigentes(wb, nit_by_name, saldos_by_nit)
+    desde, hasta, clientes_op = _parse_op_vigentes(wb, nit_by_name)
     clientes_fc = _parse_fisicos_compras(wb, nit_by_name, saldos_by_nit)
     return InformeData(
         excel_path               = excel_path,
