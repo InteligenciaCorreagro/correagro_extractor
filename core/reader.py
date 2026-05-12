@@ -6,12 +6,14 @@ import openpyxl
 from datetime import datetime
 import re
 from typing import Dict, Tuple, List
+from collections import defaultdict
 
 from core.models import (
     InformeData, ClienteOpVigente, RowOpVigente,
     ClienteFisicoCompra, RowFisicoCompra,
     CarteraData, ClienteCartera, RowCartera,
 )
+from core.pivot_cache_reader import extract_fisicos_from_pivot_cache  # ← CAMBIO 1
 
 SHEET_OP_VIGENTES     = "OP VIGENTES"
 SHEET_FISICOS_COMPRAS = "FISICOS COMPRAS"
@@ -24,8 +26,55 @@ SHEET_BD              = "BD"
 def _norm_nit(val) -> str:
     if val is None:
         return ""
+    if isinstance(val, bool):
+        return ""
+    if isinstance(val, int):
+        return str(val) if val >= 0 else ""
+    if isinstance(val, float):
+        if val < 0:
+            return ""
+        r = round(val)
+        if abs(val - r) < 1e-9:
+            return str(int(r))
+        return ""
     s = str(val).strip()
     return "".join(ch for ch in s if ch.isdigit())
+
+
+def _looks_like_yyyymmdd_digits(digits: str) -> bool:
+    """Evita confundir fechas compactas (YYYYMMDD) con NIT al escanear celdas del encabezado."""
+    if len(digits) != 8:
+        return False
+    try:
+        y = int(digits[0:4])
+        m = int(digits[4:6])
+        d = int(digits[6:8])
+    except ValueError:
+        return False
+    if not (1990 <= y <= 2100):
+        return False
+    if not (1 <= m <= 12):
+        return False
+    if not (1 <= d <= 31):
+        return False
+    return True
+
+
+def _pick_nit_from_cells_after_label(row: tuple, label_col: int) -> str:
+    """
+    Tras la celda 'NIT Tercero', elige el mejor candidato a NIT entre celdas vecinas.
+    No usa el primer bloque de dígitos (podría ser una fecha u otro número).
+    """
+    best = ""
+    for k in range(label_col + 1, min(label_col + 8, len(row))):
+        n = _norm_nit(row[k])
+        if not _is_valid_nit(n):
+            continue
+        if _looks_like_yyyymmdd_digits(n):
+            continue
+        if len(n) > len(best):
+            best = n
+    return best
 
 
 def _is_valid_nit(nit: str) -> bool:
@@ -70,6 +119,42 @@ def _safe_float(val) -> float:
         return float(val)
     except (ValueError, TypeError):
         return 0.0
+
+
+def _dedupe_fisicos_rows(rows: List[RowFisicoCompra]) -> List[RowFisicoCompra]:
+    """
+    Quita líneas duplicadas que el pivot suele repetir (mismo vcto e importes):
+    si solo una fila del grupo tiene texto en Notas y el resto va vacío, se conserva
+    la que tiene notas. Si varias tienen notas, no se fusionan.
+    """
+    if len(rows) < 2:
+        return rows
+
+    def _cents(x: float) -> int:
+        return int(round(float(x) * 100.0))
+
+    def _grp(r: RowFisicoCompra):
+        return (r.fecha_vcto, _cents(r.debitos), _cents(r.creditos))
+
+    buckets: Dict[Tuple[str, int, int], List[RowFisicoCompra]] = defaultdict(list)
+    for r in rows:
+        buckets[_grp(r)].append(r)
+
+    out: List[RowFisicoCompra] = []
+    for chunk in buckets.values():
+        if len(chunk) == 1:
+            out.append(chunk[0])
+            continue
+        nonempty = [r for r in chunk if (r.notas or "").strip()]
+        if len(nonempty) == 1:
+            out.append(nonempty[0])
+        elif len(nonempty) == 0:
+            out.append(max(chunk, key=lambda r: (r.num, r.fecha_docto)))
+        else:
+            out.extend(chunk)
+
+    out.sort(key=lambda r: (r.fecha_docto, r.num))
+    return out
 
 
 # ──────────────────────────────────────────────────────────────
@@ -218,6 +303,7 @@ def _parse_fisicos_compras(
     wb,
     nit_by_name: Dict[str, str],
     saldos_by_nit: Dict[str, dict],
+    excel_path: str,                    # ← CAMBIO 2: nuevo parámetro
 ) -> List[ClienteFisicoCompra]:
     ws = wb[SHEET_FISICOS_COMPRAS]
 
@@ -244,24 +330,40 @@ def _parse_fisicos_compras(
     idx_nombre = idx_fecha_doc = idx_fecha_vcto = idx_docto = idx_num = idx_notas = idx_debitos = idx_creditos = None
     filter_nit = None
 
-    for i, row in enumerate(ws.iter_rows(min_row=1, max_row=80, values_only=True), start=1):
+    # Dos pasadas: (1) NIT del filtro del pivot puede estar *debajo* del encabezado o más allá de la fila 80.
+    # Antes se hacía una sola pasada y al encontrar "Nombre Cliente" se cortaba el bucle, sin leer NIT Tercero posterior.
+    scan_last = min(ws.max_row, 250)
+
+    for row in ws.iter_rows(min_row=1, max_row=scan_last, values_only=True):
         if not row:
             continue
-
         for j, cell in enumerate(row):
             if str(cell).strip() == "NIT Tercero":
-                for k in range(j + 1, min(j + 6, len(row))):
-                    possible = _norm_nit(row[k])
-                    if possible:
-                        filter_nit = possible
-                        break
-                if filter_nit:
-                    break
+                picked = _pick_nit_from_cells_after_label(row, j)
+                if _is_valid_nit(picked):
+                    filter_nit = picked
+                break
 
+    best_score = -1
+    for i, row in enumerate(ws.iter_rows(min_row=1, max_row=scan_last, values_only=True), start=1):
+        if not row:
+            continue
         normed = [_norm_hdr(c) for c in row]
-        if "nombrecliente" in normed:
+        if "nombrecliente" not in normed:
+            continue
+        score = sum(
+            1 for key in (
+                "fechadocto", "fechavcto", "docto", "notas", "debitos", "creditos",
+            )
+            if key in normed
+        )
+        if "num" in normed:
+            score += 1
+        if score >= best_score:
+            best_score = score
             header_row_idx = i
             idx_nombre = normed.index("nombrecliente")
+            idx_fecha_doc = idx_fecha_vcto = idx_docto = idx_num = idx_notas = idx_debitos = idx_creditos = None
             if "fechadocto" in normed:
                 idx_fecha_doc = normed.index("fechadocto")
             if "fechavcto" in normed:
@@ -276,7 +378,6 @@ def _parse_fisicos_compras(
                 idx_debitos = normed.index("debitos")
             if "creditos" in normed:
                 idx_creditos = normed.index("creditos")
-            break
 
     if idx_nombre is None:
         idx_nombre, idx_fecha_doc, idx_fecha_vcto, idx_docto, idx_num, idx_notas, idx_debitos, idx_creditos = range(8)
@@ -394,6 +495,33 @@ def _parse_fisicos_compras(
             rows          = movements.get(nit_str, []),
         ))
 
+    # ── CAMBIO 3: Pivot cache fallback ────────────────────────
+    # Clientes que tienen saldos en BD (entradas/salidas != 0) pero
+    # no tienen filas de detalle en la hoja visible del pivot.
+    # Buscamos sus registros en el XML interno del pivot cache.
+    nits_sin_detalle = {c.nit for c in clientes if len(c.rows) == 0}
+    if nits_sin_detalle:
+        try:
+            pivot_records = extract_fisicos_from_pivot_cache(excel_path)
+            for c in clientes:
+                if c.nit in nits_sin_detalle and c.nit in pivot_records:
+                    for pr in pivot_records[c.nit]:
+                        c.rows.append(RowFisicoCompra(
+                            fecha_docto = _fmt_date(pr.fecha_docto),
+                            fecha_vcto  = _fmt_date(pr.fecha_vcto),
+                            docto       = pr.tipo_docto,
+                            num         = int(pr.num_docto) if pr.num_docto.isdigit() else 0,
+                            notas       = pr.notas,
+                            debitos     = pr.debitos,
+                            creditos    = pr.creditos,
+                        ))
+        except Exception:
+            pass  # Si falla la lectura del pivot cache, seguir sin detalle
+    # ── Fin pivot cache fallback ──────────────────────────────
+
+    for c in clientes:
+        c.rows = _dedupe_fisicos_rows(c.rows)
+
     return sorted(clientes, key=lambda c: c.razon_social)
 
 
@@ -404,7 +532,7 @@ def parse_informe(excel_path: str) -> InformeData:
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     nit_by_name, saldos_by_nit = _load_nit_map(wb)
     desde, hasta, clientes_op = _parse_op_vigentes(wb, nit_by_name)
-    clientes_fc = _parse_fisicos_compras(wb, nit_by_name, saldos_by_nit)
+    clientes_fc = _parse_fisicos_compras(wb, nit_by_name, saldos_by_nit, excel_path)  # ← CAMBIO 3
     return InformeData(
         excel_path               = excel_path,
         desde                    = desde,

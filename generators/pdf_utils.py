@@ -24,15 +24,16 @@ FOOTER_PATH = os.path.join(ASSETS_DIR, "footer.png")
 
 
 def fmt_currency(value) -> str:
-    """Formato COP: 1.055.000.402,38"""
+    """Formato COP en pesos enteros (redondeo estándar al entero más cercano)."""
     if value is None:
         return ""
     try:
         f = float(value)
-        parts = f"{abs(f):,.2f}".split(".")
-        int_part = parts[0].replace(",", ".")
-        result   = f"{int_part},{parts[1]}"
-        return f"-{result}" if f < 0 else result
+        n = int(round(f))
+        neg = n < 0
+        abs_n = abs(n)
+        int_part = f"{abs_n:,}".replace(",", ".")
+        return f"-{int_part}" if neg else int_part
     except Exception:
         return str(value)
 
